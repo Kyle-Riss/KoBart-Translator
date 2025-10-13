@@ -1,3 +1,6 @@
 [submodule "KoBART"]
 	path = KoBART
 	url = https://github.com/SKT-AI/KoBART.git
+[submodule "korean_smile_style_dataset"]
+	path = korean_smile_style_dataset
+	url = https://github.com/smilegate-ai/korean_smile_style_dataset.git
