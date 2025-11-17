@@ -4,3 +4,6 @@
 [submodule "korean_smile_style_dataset"]
 	path = korean_smile_style_dataset
 	url = https://github.com/smilegate-ai/korean_smile_style_dataset.git
+[submodule "data/korean_smile_style_dataset"]
+	path = data/korean_smile_style_dataset
+	url = https://github.com/smilegate-ai/korean_smile_style_dataset.git
