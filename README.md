@@ -1,153 +1,129 @@
-# NLP-Detection
+# KoBART Multi-Task Learning Project
 
-한국어 자연어 처리(NLP) 기반 탐지 및 분석 프로젝트입니다.
+KoBART는 한국어에 특화된 BART (Bidirectional and Auto-Regressive Transformers) 모델입니다.
 
-## 프로젝트 개요
+이 프로젝트는 **하나의 공유 인코더**와 **4개의 태스크별 디코더 헤드**를 가진 멀티태스크 학습 아키텍처를 구현합니다.
 
-이 프로젝트는 한국어 텍스트 분석을 위한 다양한 도구와 모델을 통합하여, 텍스트 탐지, 분류, 감정 분석 등의 작업을 수행합니다.
+## 🎯 프로젝트 구조
 
-## 서브모듈 구성
-
-### 1. KoBART (Korean BART)
-
-SKT-AI에서 개발한 한국어 BART 모델을 참조합니다.
-
-- **Repository**: [https://github.com/SKT-AI/KoBART](https://github.com/SKT-AI/KoBART)
-- **License**: Modified MIT License
-- **Model**: 124M parameters, encoder-decoder 구조
-- **Training Data**: 40GB+ 한국어 텍스트 (위키백과, 뉴스, 책, 모두의 말뭉치 등)
-
-**주요 기능:**
-- 텍스트 요약 (Summarization)
-- 텍스트 분류 (Classification)
-- 질의응답 (Question Answering)
-- 텍스트 생성 (Text Generation)
-
-### 2. Korean Smile Style Dataset
-
-Smilegate AI에서 제공하는 한국어 스타일 분석 데이터셋을 참조합니다.
-
-- **Repository**: [https://github.com/smilegate-ai/korean_smile_style_dataset](https://github.com/smilegate-ai/korean_smile_style_dataset)
-- **License**: Apache License 2.0
-- **Purpose**: 한국어 텍스트의 스타일 및 감정 분석
-
-**주요 기능:**
-- 한국어 텍스트 스타일 분석
-- 감정 분류 데이터셋
-- 텍스트 품질 평가
+```
+입력 → Shared Encoder → 4개의 Decoder Heads
+                         ├── Style Transfer
+                         ├── Dialogue Summarization  
+                         ├── Role-based Generation
+                         └── QA Answer Generation
+```
 
 ## 설치 방법
 
-### 1. 레포지토리 클론 (서브모듈 포함)
+### 1. 필요한 패키지 설치
 
 ```bash
-# 서브모듈과 함께 클론
-git clone --recursive https://github.com/Kyle-Riss/NLP-Detection.git
-
-# 또는 이미 클론한 경우 서브모듈 초기화
-git clone https://github.com/Kyle-Riss/NLP-Detection.git
-cd NLP-Detection
-git submodule init
-git submodule update
+pip install -r requirements.txt
 ```
 
-### 2. 필요한 패키지 설치
+또는 개별 설치:
 
 ```bash
-# KoBART 패키지 설치
-pip install git+https://github.com/SKT-AI/KoBART#egg=kobart
-
-# 추가 의존성 설치
-pip install transformers torch datasets
+pip install torch transformers sentencepiece
 ```
 
-## 사용 예시
+## 사용 방법
 
-### KoBART 사용
+### 1. 기본 KoBART 모델
+
+#### 기본 모델 로드 및 테스트
+
+```bash
+python3 quick_start.py        # 빠른 시작
+python3 example_simple.py     # 상세 예제
+python3 verify_installation.py # 설치 검증
+```
+
+### 2. Multi-Task KoBART 모델
+
+#### 모델 테스트
+
+```bash
+python3 multi_task_kobart.py
+```
+
+#### 학습 시작
+
+```bash
+python3 train_multi_task.py
+```
+
+이 스크립트는 다음 작업을 수행합니다:
+- 공유 인코더 로드
+- 4개의 태스크별 디코더 생성
+- 샘플 데이터로 학습
+
+### Python 코드에서 직접 사용
 
 ```python
-from kobart import get_kobart_tokenizer, get_pytorch_kobart_model
-from transformers import BartModel
+from transformers import BartForConditionalGeneration, PreTrainedTokenizerFast
 
-# 토크나이저 사용
-kobart_tokenizer = get_kobart_tokenizer()
-tokens = kobart_tokenizer.tokenize("안녕하세요. 한국어 BART 입니다.")
-print(tokens)
+# 모델 로드
+tokenizer = PreTrainedTokenizerFast.from_pretrained('gogamza/kobart-base-v1')
+model = BartForConditionalGeneration.from_pretrained('gogamza/kobart-base-v1')
 
-# 모델 사용
-model = BartModel.from_pretrained(get_pytorch_kobart_model())
-inputs = kobart_tokenizer(['안녕하세요.'], return_tensors='pt')
-output = model(inputs['input_ids'])
+# 텍스트 생성
+text = "KoBART는 한국어에 특화된 BART 모델입니다."
+inputs = tokenizer(text, return_tensors="pt")
+output_ids = model.generate(inputs['input_ids'], max_length=50)
+output = tokenizer.decode(output_ids[0], skip_special_tokens=True)
+
+print(output)
 ```
 
-### Korean Smile Style Dataset 사용
+## 주요 기능
 
-```python
-# 데이터셋 로드 (예시)
-import pandas as pd
-import json
+### 기본 KoBART
+- **요약 생성**: 긴 텍스트를 요약
+- **텍스트 생성**: 주어진 프롬프트로부터 텍스트 생성
+- **문장 변환**: 문장을 다른 형태로 변환
 
-# 데이터셋 파일 읽기
-with open('korean_smile_style_dataset/data/train.json', 'r', encoding='utf-8') as f:
-    train_data = json.load(f)
+### Multi-Task KoBART (4개의 전문 디코더)
+1. **Style Transfer**: 구어체 ↔ 격식체 변환
+2. **Dialogue Summarization**: 대화 내용 요약
+3. **Role-conditioned Generation**: 역할 기반 응답 생성 (선생님, 친구 등)
+4. **QA Answer Generation**: 질문에 대한 답변 생성
 
-print(f"훈련 데이터 개수: {len(train_data)}")
-```
+## 모델 정보
 
-### 통합 분석 예시
+- **모델명**: gogamza/kobart-base-v1
+- **기반**: BART (Facebook AI)
+- **언어**: 한국어
+- **태스크**: 요약, 생성, 변환 등
 
-```python
-# KoBART와 Smile Style Dataset을 함께 사용한 텍스트 분석
-def analyze_korean_text(text):
-    # KoBART로 텍스트 인코딩
-    tokens = kobart_tokenizer.tokenize(text)
-    
-    # 스타일 분석 (데이터셋 기반)
-    # 여기에 분석 로직 구현
-    
-    return {
-        'tokens': tokens,
-        'style_analysis': '분석 결과'
-    }
-```
+## 시스템 요구사항
 
-## 프로젝트 구조
+- Python 3.8 이상
+- PyTorch 2.0 이상
+- 최소 8GB RAM 권장
+- GPU 사용 시 더 빠른 처리 가능 (선택사항)
 
-```
-NLP-Detection/
-├── KoBART/                          # KoBART 서브모듈
-│   ├── kobart/
-│   ├── examples/
-│   └── ...
-├── korean_smile_style_dataset/       # Korean Smile Style Dataset 서브모듈
-│   ├── data/
-│   ├── scripts/
-│   └── ...
-├── .gitmodules                      # 서브모듈 설정
-└── README.md                        # 프로젝트 설명
-```
+## 📚 문서
 
-## 라이센스
+- **MULTI_TASK_GUIDE.md**: 멀티태스크 사용 가이드
+- **ARCHITECTURE.md**: 아키텍처 상세 설명
+- **USAGE_GUIDE.md**: 기본 사용법
+- **시작하기.md**: 빠른 시작 가이드 (한글)
 
-- **KoBART**: Modified MIT License (자세한 내용은 `KoBART/LICENSE` 참조)
-- **Korean Smile Style Dataset**: Apache License 2.0 (자세한 내용은 `korean_smile_style_dataset/LICENSE` 참조)
-- **본 프로젝트**: MIT License
+## 📊 모델 정보
+
+### 기본 KoBART
+- 파라미터: ~124M
+
+### Multi-Task KoBART
+- 공유 인코더: ~66M 파라미터
+- 4개 디코더: 각 ~103M 파라미터
+- 총 파라미터: ~481M
 
 ## 참고 자료
 
-- [KoBART GitHub Repository](https://github.com/SKT-AI/KoBART)
-- [Korean Smile Style Dataset](https://github.com/smilegate-ai/korean_smile_style_dataset)
-- [KoBART 논문 - BART: Denoising Sequence-to-Sequence Pre-training](https://arxiv.org/abs/1910.13461)
+- [Hugging Face Model Hub](https://huggingface.co/gogamza/kobart-base-v1)
+- [BART 논문](https://arxiv.org/abs/1910.13461)
 
-## 기여하기
-
-1. 이 저장소를 포크합니다
-2. 새로운 기능 브랜치를 만듭니다 (`git checkout -b feature/new-feature`)
-3. 변경사항을 커밋합니다 (`git commit -am 'Add new feature'`)
-4. 브랜치에 푸시합니다 (`git push origin feature/new-feature`)
-5. Pull Request를 생성합니다
-
----
-
-**Note**: 이 프로젝트는 한국어 NLP 연구를 위해 KoBART와 Korean Smile Style Dataset을 통합한 것입니다. 각 서브모듈의 라이센스를 준수하여 사용하시기 바랍니다.
 
