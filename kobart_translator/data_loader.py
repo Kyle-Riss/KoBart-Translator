@@ -3,14 +3,19 @@
 """
 
 import os
+from pathlib import Path
 from typing import List, Dict, Tuple
 import random
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DATA_DIR = REPO_ROOT / "data" / "korean_smile_style_dataset"
 
 
 class StyleTransferDataLoader:
     """어체 변환 데이터 로더"""
     
-    def __init__(self, base_dir: str = "."):
+    def __init__(self, base_dir: str = str(DEFAULT_DATA_DIR)):
         self.base_dir = base_dir
         self.parallel_dir = os.path.join(base_dir, "수동태깅 병렬데이터")
         self.opus_dir = os.path.join(base_dir, "OPUS 오픈 코퍼스 단일데이터")

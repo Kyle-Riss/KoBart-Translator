@@ -5,7 +5,7 @@ Multi-Task KoBART 학습 예제
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from multi_task_kobart import MultiTaskKoBART
+from kobart_translator import MultiTaskKoBART
 from transformers import PreTrainedTokenizerFast
 from typing import Dict, List
 

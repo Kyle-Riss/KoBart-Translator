@@ -73,7 +73,7 @@
 ### 기본 사용법
 
 ```python
-from multi_task_kobart import MultiTaskKoBART
+from kobart_translator import MultiTaskKoBART
 from transformers import PreTrainedTokenizerFast
 import torch
 

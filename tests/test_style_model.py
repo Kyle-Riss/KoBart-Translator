@@ -4,8 +4,7 @@
 
 import torch
 from transformers import PreTrainedTokenizerFast
-from multi_task_kobart import MultiTaskKoBART
-from data_loader import StyleTransferDataLoader
+from kobart_translator import MultiTaskKoBART, StyleTransferDataLoader
 
 
 def load_model(checkpoint_path: str, device):

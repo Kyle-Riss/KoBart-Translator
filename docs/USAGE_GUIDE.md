@@ -9,19 +9,19 @@ KoBART 모델이 성공적으로 설치되었습니다!
 ### 1. 가장 간단한 방법
 
 ```bash
-python3 quick_start.py
+python3 scripts/basic/quick_start.py
 ```
 
 ### 2. 상세한 예제
 
 ```bash
-python3 example_simple.py
+python3 scripts/basic/example_simple.py
 ```
 
 ### 3. 대화형 모드
 
 ```bash
-python3 load_kobart.py
+python3 scripts/basic/load_kobart.py
 ```
 
 ## 💡 Python 코드에서 사용하기

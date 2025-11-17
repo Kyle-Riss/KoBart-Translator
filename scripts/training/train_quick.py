@@ -6,8 +6,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import PreTrainedTokenizerFast
-from multi_task_kobart import MultiTaskKoBART
-from data_loader import StyleTransferDataLoader
+from kobart_translator import MultiTaskKoBART, StyleTransferDataLoader
 from tqdm import tqdm
 import os
 

@@ -14,6 +14,17 @@ KoBART는 한국어에 특화된 BART (Bidirectional and Auto-Regressive Transfo
                          └── QA Answer Generation
 ```
 
+## 📁 폴더 구성
+
+- `kobart_translator/`: MultiTaskKoBART 및 데이터 로더 등 핵심 모듈
+- `scripts/basic/`: 빠른 시작, 예제 및 설치 검증 스크립트
+- `scripts/demos/`: 인터랙티브 데모
+- `scripts/training/`: 학습 및 파인튜닝 스크립트
+- `tests/`: 회귀 및 유닛 테스트
+- `docs/`: 아키텍처 및 사용 가이드 문서
+- `data/`: 예제 데이터셋 (`korean_smile_style_dataset`)
+- `logs/`: 학습/실행 로그
+
 ## 설치 방법
 
 ### 1. 필요한 패키지 설치
@@ -35,9 +46,11 @@ pip install torch transformers sentencepiece
 #### 기본 모델 로드 및 테스트
 
 ```bash
-python3 quick_start.py        # 빠른 시작
-python3 example_simple.py     # 상세 예제
-python3 verify_installation.py # 설치 검증
+python3 scripts/basic/quick_start.py           # 빠른 시작
+python3 scripts/basic/example_simple.py        # 상세 예제
+python3 scripts/basic/verify_installation.py   # 설치 검증
+python3 scripts/basic/load_kobart.py           # 대화형 모드 포함
+python3 scripts/demos/interactive_demo.py      # 실시간 데모
 ```
 
 ### 2. Multi-Task KoBART 모델
@@ -45,13 +58,13 @@ python3 verify_installation.py # 설치 검증
 #### 모델 테스트
 
 ```bash
-python3 multi_task_kobart.py
+python3 -m kobart_translator.multi_task
 ```
 
 #### 학습 시작
 
 ```bash
-python3 train_multi_task.py
+python3 scripts/training/train_multi_task.py
 ```
 
 이 스크립트는 다음 작업을 수행합니다:
@@ -106,10 +119,9 @@ print(output)
 
 ## 📚 문서
 
-- **MULTI_TASK_GUIDE.md**: 멀티태스크 사용 가이드
-- **ARCHITECTURE.md**: 아키텍처 상세 설명
-- **USAGE_GUIDE.md**: 기본 사용법
-- **시작하기.md**: 빠른 시작 가이드 (한글)
+- **docs/MULTI_TASK_GUIDE.md**: 멀티태스크 사용 가이드
+- **docs/ARCHITECTURE.md**: 아키텍처 상세 설명
+- **docs/USAGE_GUIDE.md**: 기본 사용법
 
 ## 📊 모델 정보
 
