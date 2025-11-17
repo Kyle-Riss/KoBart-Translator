@@ -4,7 +4,7 @@
 
 import torch
 from transformers import PreTrainedTokenizerFast
-from multi_task_kobart import MultiTaskKoBART
+from kobart_translator import MultiTaskKoBART
 
 
 def load_model(checkpoint_path: str, device):

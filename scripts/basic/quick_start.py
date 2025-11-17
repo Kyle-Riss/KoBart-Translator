@@ -48,9 +48,10 @@ def main():
     
     print("="*60)
     print("\n사용 가능한 스크립트:")
-    print("  - example_simple.py : 상세한 예제")
-    print("  - load_kobart.py : 대화형 모드 포함")
-    print("  - quick_start.py : 빠른 시작 (현재 파일)")
+    print("  - scripts/basic/example_simple.py : 상세한 예제")
+    print("  - scripts/basic/load_kobart.py : 대화형 모드 포함")
+    print("  - scripts/demos/interactive_demo.py : 실시간 데모")
+    print("  - scripts/basic/quick_start.py : 빠른 시작 (현재 파일)")
     print("\n실행 방법: python3 <파일명>")
 
 

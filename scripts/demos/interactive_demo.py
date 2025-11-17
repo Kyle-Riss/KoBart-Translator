@@ -3,7 +3,7 @@
 """
 
 import torch
-from multi_task_kobart import MultiTaskKoBART
+from kobart_translator import MultiTaskKoBART
 from transformers import PreTrainedTokenizerFast
 
 
