@@ -122,7 +122,7 @@ class MultiTaskKoBART(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         task: str = 'style_transfer',
         max_length: int = 50,
-        num_beams: int = 5,
+        num_beams: int = 5, # 구현 필요
         **kwargs
     ):
         """
