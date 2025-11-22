@@ -1,13 +1,24 @@
 """
-Multi-Task KoBART 학습 예제
+Multi-Task KoBART 학습 스크립트
+--------------------------------
+- data/processed/*.jsonl (prepare_multitask_dataset.py) 를 학습/검증 데이터로 사용
+- 태스크별로 샘플 수를 제한할 수 있으며 QA dev split을 검증용으로 활용
 """
+
+import argparse
+import json
+from collections import defaultdict
+from contextlib import nullcontext
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from kobart_translator import MultiTaskKoBART
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.tensorboard import SummaryWriter
 from transformers import PreTrainedTokenizerFast
-from typing import Dict, List
+
+from kobart_translator import MultiTaskKoBART
 
 
 class MultiTaskDataset(Dataset):
@@ -17,17 +28,20 @@ class MultiTaskDataset(Dataset):
         self,
         data: List[Dict],
         tokenizer: PreTrainedTokenizerFast,
-        max_length: int = 512
+        max_length: int,
+        decoder_start_token_id: int,
     ):
         """
         Args:
-            data: 데이터 리스트 [{'task': task_name, 'input': text, 'target': text}, ...]
-            tokenizer: 토크나이저
-            max_length: 최대 시퀀스 길이
+            data: [{'task': task_name, 'input': text, 'target': text}, ...]
+            tokenizer: KoBART tokenizer
+            max_length: max sequence length
+            decoder_start_token_id: BOS token for decoder inputs
         """
         self.data = data
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.decoder_start_token_id = decoder_start_token_id
     
     def __len__(self):
         return len(self.data)
@@ -35,124 +49,107 @@ class MultiTaskDataset(Dataset):
     def __getitem__(self, idx):
         item = self.data[idx]
         
-        # 입력 토큰화
         inputs = self.tokenizer(
-            item['input'],
+            item["input"],
             max_length=self.max_length,
-            padding='max_length',
+            padding="max_length",
             truncation=True,
-            return_tensors='pt'
+            return_tensors="pt",
         )
         
-        # 타겟 토큰화
         targets = self.tokenizer(
-            item['target'],
+            item["target"],
             max_length=self.max_length,
-            padding='max_length',
+            padding="max_length",
             truncation=True,
-            return_tensors='pt'
+            return_tensors="pt",
         )
+
+        target_ids = targets["input_ids"].squeeze(0)
+        decoder_input_ids = target_ids.clone()
+        decoder_input_ids[1:] = target_ids[:-1]
+        decoder_input_ids[0] = self.decoder_start_token_id
+
+        labels = target_ids.clone()
+        labels[labels == self.tokenizer.pad_token_id] = -100
         
         return {
-            'task': item['task'],
-            'input_ids': inputs['input_ids'].squeeze(0),
-            'attention_mask': inputs['attention_mask'].squeeze(0),
-            'labels': targets['input_ids'].squeeze(0)
+            "task": item["task"],
+            "input_ids": inputs["input_ids"].squeeze(0),
+            "attention_mask": inputs["attention_mask"].squeeze(0),
+            "decoder_input_ids": decoder_input_ids,
+            "labels": labels,
         }
 
 
-def create_sample_dataset() -> List[Dict]:
-    """샘플 학습 데이터 생성"""
-    return [
-        # Style Transfer 데이터
-        {
-            'task': 'style_transfer',
-            'input': '이거 좀 도와주세요.',
-            'target': '이것을 도와주시겠습니까?'
-        },
-        {
-            'task': 'style_transfer',
-            'input': '빨리 와.',
-            'target': '빠른 시일 내에 방문해 주시기 바랍니다.'
-        },
-        
-        # Dialogue Summarization 데이터
-        {
-            'task': 'dialogue_summarization',
-            'input': 'A: 내일 회의 몇 시에요? B: 오후 2시입니다. A: 알겠습니다.',
-            'target': '내일 회의는 오후 2시에 있습니다.'
-        },
-        {
-            'task': 'dialogue_summarization',
-            'input': 'A: 점심 뭐 먹을까요? B: 한식이 좋겠어요. A: 좋아요.',
-            'target': '점심으로 한식을 먹기로 했습니다.'
-        },
-        
-        # Role-conditioned Generation 데이터
-        {
-            'task': 'role_generation',
-            'input': '[선생님] 파이썬이란 무엇인가요?',
-            'target': '파이썬은 배우기 쉬운 프로그래밍 언어로, 다양한 분야에서 활용됩니다.'
-        },
-        {
-            'task': 'role_generation',
-            'input': '[친구] 주말에 뭐해?',
-            'target': '특별한 계획은 없어. 너는?'
-        },
-        
-        # QA Generation 데이터
-        {
-            'task': 'qa_generation',
-            'input': '질문: 서울의 인구는 얼마나 되나요?',
-            'target': '서울의 인구는 약 1천만 명입니다.'
-        },
-        {
-            'task': 'qa_generation',
-            'input': '질문: 인공지능의 장점은 무엇인가요?',
-            'target': '인공지능은 대량의 데이터를 빠르게 처리하고 패턴을 학습할 수 있습니다.'
-        }
-    ]
+def load_processed_dataset(
+    processed_dir: Path,
+    split: str,
+    max_samples: Optional[int],
+    max_per_task: Optional[int],
+) -> List[Dict]:
+    """Load JSONL samples generated by prepare_multitask_dataset.py."""
+    processed_dir = processed_dir.expanduser()
+    if not processed_dir.exists():
+        raise FileNotFoundError(f"Processed directory not found: {processed_dir}")
+
+    data: List[Dict] = []
+    per_task_counts = defaultdict(int)
+
+    files = sorted(processed_dir.glob("*.jsonl"))
+    for path in files:
+        with path.open("r", encoding="utf-8") as fp:
+            for line in fp:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                task_split = item.get("meta", {}).get("split", "train")
+                if split == "dev":
+                    if task_split != "dev":
+                        continue
+                else:  # train
+                    if task_split == "dev":
+                        continue
+
+                task_name = item["task"]
+                if max_per_task is not None and per_task_counts[task_name] >= max_per_task:
+                    continue
+
+                data.append(
+                    {
+                        "task": task_name,
+                        "input": item["input"],
+                        "target": item["target"],
+                        "meta": item.get("meta", {}),
+                    }
+                )
+                per_task_counts[task_name] += 1
+
+                if max_samples is not None and len(data) >= max_samples:
+                    break
+        if max_samples is not None and len(data) >= max_samples:
+            break
+
+    return data
 
 
-def train_step(
-    model: MultiTaskKoBART,
-    batch: Dict,
-    optimizer: torch.optim.Optimizer,
-    device: torch.device
-) -> float:
-    """한 스텝 학습"""
-    model.train()
-    
-    # 데이터를 디바이스로 이동
-    input_ids = batch['input_ids'].to(device)
-    attention_mask = batch['attention_mask'].to(device)
-    labels = batch['labels'].to(device)
-    task = batch['task'][0]  # 배치 내 모든 샘플이 같은 태스크라고 가정
-    
-    # Decoder input ids 생성 (labels를 오른쪽으로 시프트)
-    decoder_input_ids = labels.clone()
-    decoder_input_ids[:, 1:] = labels[:, :-1]
-    decoder_input_ids[:, 0] = model.config.decoder_start_token_id
-    
-    # Forward pass
-    outputs = model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        decoder_input_ids=decoder_input_ids,
-        task=task
-    )
-    
-    # Loss 계산
-    logits = outputs['logits']
-    loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
-    loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
-    
-    # Backward pass
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    
-    return loss.item()
+def _group_task_indices(task_field) -> Dict[str, List[int]]:
+    if isinstance(task_field, str):
+        return {task_field: [0]}
+    if isinstance(task_field, list):
+        tasks = task_field
+    else:
+        tasks = list(task_field)
+    mapping: Dict[str, List[int]] = defaultdict(list)
+    for idx, task in enumerate(tasks):
+        mapping[task].append(idx)
+    return mapping
+
+
+def _autocast_context(device: torch.device, use_amp: bool):
+    if use_amp and device.type in ("cuda", "mps"):
+        return torch.autocast(device_type=device.type, dtype=torch.float16)
+    return nullcontext()
 
 
 def train_epoch(
@@ -160,95 +157,374 @@ def train_epoch(
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    epoch: int
-):
-    """한 에포크 학습"""
-    total_loss = 0
-    task_losses = {'style_transfer': [], 'dialogue_summarization': [], 
-                   'role_generation': [], 'qa_generation': []}
+    epoch: int,
+    use_amp: bool,
+    writer: Optional[SummaryWriter] = None,
+    global_step: int = 0,
+) -> Tuple[float, int]:
+    """Train for one epoch."""
+    loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+    running_loss = 0.0
+    task_loss_log: Dict[str, List[float]] = defaultdict(list)
     
     for batch_idx, batch in enumerate(dataloader):
-        loss = train_step(model, batch, optimizer, device)
-        total_loss += loss
-        
-        task = batch['task'][0]
-        task_losses[task].append(loss)
+        model.train()
+        optimizer.zero_grad()
+        task_groups = _group_task_indices(batch["task"])
+        batch_size = sum(len(idxs) for idxs in task_groups.values())
+        batch_loss = 0.0
+
+        for task, indices in task_groups.items():
+            idx_tensor = torch.tensor(indices, dtype=torch.long)
+            input_ids = batch["input_ids"][idx_tensor].to(device)
+            attention_mask = batch["attention_mask"][idx_tensor].to(device)
+            decoder_input_ids = batch["decoder_input_ids"][idx_tensor].to(device)
+            labels = batch["labels"][idx_tensor].to(device)
+
+            with _autocast_context(device, use_amp):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    decoder_input_ids=decoder_input_ids,
+                    task=task,
+                )
+                logits = outputs["logits"]
+                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+            weight = len(indices) / batch_size
+            (loss * weight).backward()
+
+            batch_loss += loss.item() * weight
+            task_loss_log[task].append(loss.item())
+
+        # Gradient clipping and logging
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+
+        running_loss += batch_loss
+        global_step += 1
+
+        if writer is not None:
+            writer.add_scalar("train/batch_loss", batch_loss, global_step)
+            writer.add_scalar("train/grad_norm", grad_norm.item(), global_step)
+            for task, losses in task_loss_log.items():
+                if losses:
+                    writer.add_scalar(f"train/task_loss/{task}", losses[-1], global_step)
         
         if (batch_idx + 1) % 10 == 0:
-            avg_loss = total_loss / (batch_idx + 1)
-            print(f"Epoch {epoch} | Batch {batch_idx + 1} | Loss: {avg_loss:.4f}")
+            avg_loss = running_loss / (batch_idx + 1)
+            print(f"Epoch {epoch} | Batch {batch_idx + 1} | Train Loss: {avg_loss:.4f}")
     
-    # 태스크별 평균 손실 출력
-    print(f"\n태스크별 평균 손실:")
-    for task, losses in task_losses.items():
-        if losses:
-            avg_loss = sum(losses) / len(losses)
-            print(f"  {task}: {avg_loss:.4f}")
-    
-    return total_loss / len(dataloader)
+    print("\n태스크별 Train 손실:")
+    for task, losses in task_loss_log.items():
+        avg_loss = sum(losses) / len(losses)
+        print(f"  {task}: {avg_loss:.4f}")
+        if writer is not None:
+            writer.add_scalar(f"train/epoch_task_loss/{task}", avg_loss, epoch)
+
+    avg_epoch_loss = running_loss / max(1, len(dataloader))
+    if writer is not None:
+        writer.add_scalar("train/epoch_loss", avg_epoch_loss, epoch)
+
+    return avg_epoch_loss, global_step
+
+
+@torch.no_grad()
+def evaluate(
+    model: MultiTaskKoBART,
+    dataloader: DataLoader,
+    device: torch.device,
+    use_amp: bool,
+    writer: Optional[SummaryWriter] = None,
+    epoch: int = 0,
+) -> Dict[str, float]:
+    """Evaluate on dev split and return overall/ per-task losses."""
+    loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+    total_loss = 0.0
+    batch_count = 0
+    task_loss_log: Dict[str, List[float]] = defaultdict(list)
+
+    for batch in dataloader:
+        model.eval()
+        task_groups = _group_task_indices(batch["task"])
+        batch_size = sum(len(idxs) for idxs in task_groups.values())
+        batch_loss = 0.0
+
+        for task, indices in task_groups.items():
+            idx_tensor = torch.tensor(indices, dtype=torch.long)
+            input_ids = batch["input_ids"][idx_tensor].to(device)
+            attention_mask = batch["attention_mask"][idx_tensor].to(device)
+            decoder_input_ids = batch["decoder_input_ids"][idx_tensor].to(device)
+            labels = batch["labels"][idx_tensor].to(device)
+
+            with _autocast_context(device, use_amp):
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    decoder_input_ids=decoder_input_ids,
+                    task=task,
+                )
+                logits = outputs["logits"]
+                loss = loss_fct(logits.view(-1, logits.size(-1)), labels.view(-1))
+            weight = len(indices) / batch_size
+            batch_loss += loss.item() * weight
+            task_loss_log[task].append(loss.item())
+
+        total_loss += batch_loss
+        batch_count += 1
+
+    average_loss = total_loss / max(1, batch_count)
+    per_task = {task: sum(values) / len(values) for task, values in task_loss_log.items()}
+    per_task["overall"] = average_loss
+
+    if writer is not None:
+        writer.add_scalar("dev/overall_loss", average_loss, epoch)
+        for task, avg_loss in per_task.items():
+            if task != "overall":
+                writer.add_scalar(f"dev/task_loss/{task}", avg_loss, epoch)
+
+    return per_task
+
+
+def parse_args():
+    default_processed = Path(__file__).resolve().parents[2] / "data" / "processed"
+    default_output = Path("runs/multitask_kobart.pt")
+
+    parser = argparse.ArgumentParser(description="Train Multi-Task KoBART using processed JSONL data.")
+    parser.add_argument("--processed-dir", type=Path, default=default_processed, help="Directory with data/processed/*.jsonl")
+    parser.add_argument("--model-name", type=str, default="gogamza/kobart-base-v1")
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--learning-rate", type=float, default=5e-5)
+    parser.add_argument("--weight-decay", type=float, default=0.01, help="Weight decay for regularization.")
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--early-stopping-patience", type=int, default=5, help="Early stopping patience (epochs without improvement).")
+    parser.add_argument("--lr-scheduler", type=str, default="plateau", choices=["plateau", "cosine", "none"], help="Learning rate scheduler type.")
+    parser.add_argument("--max-train-samples", type=int, default=None)
+    parser.add_argument("--max-train-per-task", type=int, default=5000)
+    parser.add_argument("--max-dev-samples", type=int, default=None)
+    parser.add_argument("--max-dev-per-task", type=int, default=1000)
+    parser.add_argument("--output", type=Path, default=default_output, help="Where to store the trained checkpoint.")
+    parser.add_argument("--freeze-encoder", action="store_true", help="Freeze shared encoder parameters.")
+    parser.add_argument("--use-amp", action="store_true", help="Enable mixed precision (CUDA/MPS only).")
+    parser.add_argument("--gradient-checkpointing", action="store_true", help="Enable gradient checkpointing on encoder/decoder.")
+    parser.add_argument("--encoder-layers", type=int, default=None, help="Number of encoder layers to keep (default: all).")
+    parser.add_argument("--decoder-layers", type=int, default=None, help="Number of decoder layers to keep (default: all).")
+    parser.add_argument("--ffn-dim", type=int, default=None, help="Reduce feed-forward hidden size.")
+    parser.add_argument("--num-attention-heads", type=int, default=None, help="Override attention head count (must divide hidden size).")
+    parser.add_argument("--log-dir", type=Path, default=None, help="TensorBoard log directory (default: runs/logs/<timestamp>).")
+    parser.add_argument("--save-log-json", type=Path, default=None, help="Save training logs to JSON file.")
+    return parser.parse_args()
 
 
 def main():
-    """학습 메인 함수"""
-    print("="*60)
-    print("Multi-Task KoBART 학습 예제")
-    print("="*60)
-    print()
-    
-    # 하이퍼파라미터
-    BATCH_SIZE = 2
-    LEARNING_RATE = 5e-5
-    NUM_EPOCHS = 3
-    
-    # 디바이스 설정
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"디바이스: {device}\n")
-    
-    # 토크나이저 및 모델 로드
-    print("모델 로딩 중...")
-    tokenizer = PreTrainedTokenizerFast.from_pretrained('gogamza/kobart-base-v1')
-    model = MultiTaskKoBART()
+    args = parse_args()
+
+    print("=" * 60)
+    print("Multi-Task KoBART 학습 시작")
+    print("=" * 60)
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    print(f"Device: {device}")
+    print(f"Processed Dir: {args.processed_dir}")
+
+    tokenizer = PreTrainedTokenizerFast.from_pretrained(args.model_name)
+    model = MultiTaskKoBART(
+        model_name=args.model_name,
+        encoder_layers=args.encoder_layers,
+        decoder_layers=args.decoder_layers,
+        ffn_dim=args.ffn_dim,
+        num_attention_heads=args.num_attention_heads,
+        gradient_checkpointing=args.gradient_checkpointing,
+    )
+    if args.freeze_encoder:
+        model.freeze_encoder()
     model.to(device)
-    print("✓ 모델 로드 완료\n")
+    print("✓ 모델 로드 완료")
+
+    print("\n데이터 불러오기...")
+    train_data = load_processed_dataset(
+        processed_dir=args.processed_dir,
+        split="train",
+        max_samples=args.max_train_samples,
+        max_per_task=args.max_train_per_task,
+    )
+    dev_data = load_processed_dataset(
+        processed_dir=args.processed_dir,
+        split="dev",
+        max_samples=args.max_dev_samples,
+        max_per_task=args.max_dev_per_task,
+    )
+    if not train_data:
+        raise RuntimeError("Train split이 비어있습니다. prepare_multitask_dataset.py 실행 여부를 확인하세요.")
+    if not dev_data:
+        print("[WARN] Dev split을 찾지 못했습니다. 학습 데이터 일부를 검증에 사용합니다.")
+        dev_data = train_data[: min(len(train_data), max(1, args.batch_size * 50))]
+
+    print(f"Train samples: {len(train_data)} | Dev samples: {len(dev_data)}")
+
+    train_dataset = MultiTaskDataset(
+        train_data,
+        tokenizer,
+        max_length=args.max_length,
+        decoder_start_token_id=model.config.decoder_start_token_id,
+    )
+    dev_dataset = MultiTaskDataset(
+        dev_data,
+        tokenizer,
+        max_length=args.max_length,
+        decoder_start_token_id=model.config.decoder_start_token_id,
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
+    dev_loader = DataLoader(dev_dataset, batch_size=args.batch_size, shuffle=False)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay
+    )
     
-    # 샘플 데이터 생성
-    print("데이터 준비 중...")
-    train_data = create_sample_dataset()
-    train_dataset = MultiTaskDataset(train_data, tokenizer)
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    print(f"✓ 총 {len(train_data)}개 샘플\n")
+    # Learning rate scheduler
+    if args.lr_scheduler == "plateau":
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="min", factor=0.5, patience=3, verbose=True
+        )
+        print(f"Learning rate scheduler: ReduceLROnPlateau (patience=3, factor=0.5)")
+    elif args.lr_scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=1e-6
+        )
+        print(f"Learning rate scheduler: CosineAnnealingLR (T_max={args.epochs})")
+    else:
+        scheduler = None
+        print("Learning rate scheduler: None")
     
-    # Optimizer 설정
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+    use_amp = args.use_amp and device.type in ("cuda", "mps")
+    if use_amp:
+        print("Mixed precision (AMP) 활성화")
     
-    # 학습
-    print("학습 시작...\n")
-    print("-"*60)
+    print(f"Weight decay: {args.weight_decay}")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    best_dev_loss = float("inf")
+    best_epoch = 0
+    early_stopping_counter = 0
+
+    # Setup TensorBoard
+    if args.log_dir is None:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.log_dir = Path("runs") / "logs" / timestamp
+    args.log_dir.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(log_dir=str(args.log_dir))
+    print(f"TensorBoard logs: {args.log_dir}")
+    print(f"  View with: tensorboard --logdir {args.log_dir}")
     
-    for epoch in range(1, NUM_EPOCHS + 1):
-        print(f"\n[Epoch {epoch}/{NUM_EPOCHS}]")
-        avg_loss = train_epoch(model, train_dataloader, optimizer, device, epoch)
-        print(f"\nEpoch {epoch} 평균 손실: {avg_loss:.4f}")
-        print("-"*60)
-    
-    print("\n✓ 학습 완료!")
-    
-    # 모델 저장
-    save_path = "/Users/arka/Desktop/Ko-bart/multi_task_model.pt"
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-    }, save_path)
-    print(f"\n모델 저장 완료: {save_path}")
-    
-    print("\n" + "="*60)
-    print("학습 팁:")
-    print("1. 실제 학습에는 더 많은 데이터가 필요합니다")
-    print("2. 태스크별로 균형잡힌 데이터셋 구성이 중요합니다")
-    print("3. 인코더를 고정하고 디코더만 학습할 수도 있습니다:")
-    print("   model.freeze_encoder()")
-    print("4. 태스크별로 별도의 learning rate 적용 가능")
-    print("="*60)
+    # Training history for JSON export
+    training_history = {
+        "epochs": [],
+        "train_loss": [],
+        "dev_loss": [],
+        "dev_task_losses": defaultdict(list),
+    }
+
+    global_step = 0
+    for epoch in range(1, args.epochs + 1):
+        print(f"\n[Epoch {epoch}/{args.epochs}]")
+        train_loss, global_step = train_epoch(
+            model, train_loader, optimizer, device, epoch, use_amp, writer, global_step
+        )
+        print(f"Epoch {epoch} Train Loss: {train_loss:.4f}")
+
+        dev_metrics = evaluate(model, dev_loader, device, use_amp, writer, epoch)
+        dev_summary = ", ".join(f"{task}: {loss:.4f}" for task, loss in dev_metrics.items())
+        print(f"Epoch {epoch} Dev Losses -> {dev_summary}")
+        overall_loss = dev_metrics.get("overall", float("inf"))
+
+        # Save to history
+        training_history["epochs"].append(epoch)
+        training_history["train_loss"].append(train_loss)
+        training_history["dev_loss"].append(overall_loss)
+        for task, loss_val in dev_metrics.items():
+            if task != "overall":
+                training_history["dev_task_losses"][task].append(loss_val)
+
+        # Learning rate scheduling
+        if scheduler is not None:
+            if args.lr_scheduler == "plateau":
+                scheduler.step(overall_loss)
+            elif args.lr_scheduler == "cosine":
+                scheduler.step()
+            current_lr = optimizer.param_groups[0]["lr"]
+            if writer is not None:
+                writer.add_scalar("train/learning_rate", current_lr, epoch)
+            print(f"  Current LR: {current_lr:.2e}")
+
+        # Early stopping and best checkpoint
+        if overall_loss < best_dev_loss:
+            best_dev_loss = overall_loss
+            best_epoch = epoch
+            early_stopping_counter = 0
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "tokenizer": tokenizer.name_or_path,
+                    "epoch": epoch,
+                    "dev_loss": overall_loss,
+                },
+                args.output,
+            )
+            print(
+                f"[+] Best checkpoint 갱신 (epoch {epoch}, overall {overall_loss:.4f}) "
+                f"-> {args.output}"
+            )
+        else:
+            early_stopping_counter += 1
+            print(f"[!] Dev loss 증가 ({early_stopping_counter}/{args.early_stopping_patience})")
+            
+            # Early stopping
+            if early_stopping_counter >= args.early_stopping_patience:
+                print(f"\n[!] Early stopping triggered!")
+                print(f"    Best epoch: {best_epoch}, Best dev loss: {best_dev_loss:.4f}")
+                print(f"    Training stopped at epoch {epoch}")
+                break
+
+    if best_epoch == 0:
+        # ensure at least one save (should not happen but for safety)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "tokenizer": tokenizer.name_or_path,
+                "epoch": args.epochs,
+                "dev_loss": best_dev_loss,
+            },
+            args.output,
+        )
+
+    writer.close()
+    print(f"\n✓ 최종 저장 완료: {args.output} (best epoch {best_epoch}, dev {best_dev_loss:.4f})")
+    print(f"✓ TensorBoard logs: {args.log_dir}")
+
+    # Save training history to JSON
+    if args.save_log_json:
+        args.save_log_json.parent.mkdir(parents=True, exist_ok=True)
+        # Convert defaultdict to dict for JSON serialization
+        history_dict = {
+            "epochs": training_history["epochs"],
+            "train_loss": training_history["train_loss"],
+            "dev_loss": training_history["dev_loss"],
+            "dev_task_losses": dict(training_history["dev_task_losses"]),
+            "best_epoch": best_epoch,
+            "best_dev_loss": best_dev_loss,
+        }
+        with open(args.save_log_json, "w", encoding="utf-8") as f:
+            json.dump(history_dict, f, indent=2, ensure_ascii=False)
+        print(f"✓ Training history saved: {args.save_log_json}")
 
 
 if __name__ == "__main__":

@@ -95,13 +95,11 @@ BartEncoder(
 3. 12개 레이어를 통과하며 컨텍스트 인코딩
 4. 최종 hidden states 출력 (context vector)
 
-### 2. Task-Specific Decoders (태스크별 디코더)
+### 2. Decoder Groups (태스크별 디코더)
 
-**위치**: 
-- `model.decoders['style_transfer']`
-- `model.decoders['dialogue_summarization']`
-- `model.decoders['role_generation']`
-- `model.decoders['qa_generation']`
+**위치 / 매핑**: 
+- `model.decoders['shared_text']` → `style_transfer`, `dialogue_summarization`, `role_generation`
+- `model.decoders['qa_generation']` → `qa_generation`
 
 **구조** (각 디코더):
 ```python
@@ -125,21 +123,19 @@ BartDecoder(
 
 **파라미터** (디코더 1개):
 - 약 103M 파라미터
-- **4개 디코더 총 약 412M 파라미터**
+- **현재 구성:** 공유 Text 디코더 + QA 디코더 = 총 약 206M
 
 **역할**:
 1. 인코더의 context vector를 받음
 2. Cross-attention으로 인코더 정보 활용
 3. Self-attention으로 이전 토큰 참조
-4. 태스크에 특화된 출력 생성
+4. 태스크 그룹에 특화된 출력 생성 (style/summary/role은 하나의 디코더 공유)
 
 ### 3. Language Model Heads (LM 헤드)
 
-**위치**:
-- `model.lm_heads['style_transfer']`
-- `model.lm_heads['dialogue_summarization']`
-- `model.lm_heads['role_generation']`
-- `model.lm_heads['qa_generation']`
+**위치 / 매핑**:
+- `model.lm_heads['shared_text']` → `style_transfer`, `dialogue_summarization`, `role_generation`
+- `model.lm_heads['qa_generation']` → `qa_generation`
 
 **구조**:
 ```python
@@ -148,7 +144,7 @@ Linear(768, 30000)  # hidden_size → vocab_size
 
 **파라미터** (헤드 1개):
 - 768 × 30,000 = 23,040,000
-- **4개 헤드 총 약 92M 파라미터**
+- **현재 구성:** 2개 헤드 → 총 약 46M 파라미터
 
 **역할**:
 1. 디코더 출력 (768차원)을 어휘 크기(30,000)로 변환
@@ -157,15 +153,13 @@ Linear(768, 30000)  # hidden_size → vocab_size
 
 ## 📊 전체 파라미터 통계
 
-| 컴포넌트 | 파라미터 수 | 비율 |
-|---------|-----------|------|
-| Shared Encoder | 66M | 13.7% |
-| Decoder 1 | 103M | 21.4% |
-| Decoder 2 | 103M | 21.4% |
-| Decoder 3 | 103M | 21.4% |
-| Decoder 4 | 103M | 21.4% |
-| LM Head 1-4 | 23M × 4 | 19.2% |
-| **총합** | **~481M** | **100%** |
+| 컴포넌트 | 파라미터 수 | 비율(대략) |
+|---------|-----------|-----------|
+| Shared Encoder | 66M | 24% |
+| Shared Text Decoder | 103M | 37% |
+| QA Decoder | 103M | 37% |
+| LM Heads (2) | 23M × 2 | 12% |
+| **총합** | **~295M** | **100%** |
 
 ## 🔄 데이터 흐름
 
@@ -183,7 +177,8 @@ encoder_output = model.shared_encoder(tokens['input_ids'])
 
 # 3. 태스크 선택
 task = 'style_transfer'
-decoder = model.decoders[task]
+decoder_key = model.task_to_decoder[task]
+decoder = model.decoders[decoder_key]
 
 # 4. 디코더 통과
 decoder_output = decoder(
@@ -193,7 +188,7 @@ decoder_output = decoder(
 # decoder_output.shape: [batch_size, target_len, 768]
 
 # 5. LM Head 통과
-logits = model.lm_heads[task](decoder_output)
+logits = model.lm_heads[decoder_key](decoder_output)
 # logits.shape: [batch_size, target_len, 30000]
 
 # 6. 토큰 예측

@@ -17,13 +17,28 @@ KoBART는 한국어에 특화된 BART (Bidirectional and Auto-Regressive Transfo
 ## 📁 폴더 구성
 
 - `kobart_translator/`: MultiTaskKoBART 및 데이터 로더 등 핵심 모듈
-- `scripts/basic/`: 빠른 시작, 예제 및 설치 검증 스크립트
-- `scripts/demos/`: 인터랙티브 데모
-- `scripts/training/`: 학습 및 파인튜닝 스크립트
+- `scripts/basic|demos|training|data/`: 실행·데모·학습·데이터 유틸 스크립트
 - `tests/`: 회귀 및 유닛 테스트
 - `docs/`: 아키텍처 및 사용 가이드 문서
-- `data/`: 예제 데이터셋 (`korean_smile_style_dataset`)
+- `data/`: 태스크별 데이터셋 (아래 참조)
 - `logs/`: 학습/실행 로그
+
+### 데이터셋 디렉터리
+
+| Task | Path | 비고 |
+| --- | --- | --- |
+| Style Transfer | `data/style_transfer/korean_smile_style_dataset/` | Smilegate submodule |
+| Dialogue Summarization | `data/dialogue_summarization/aihub_dialogue_summary/` | AI Hub 원본 ZIP |
+| Role-conditioned Generation | `data/role_generation/aihub_dialogue_role_dataset/` | AI Hub 응급/오피스 대화 ZIP |
+| QA Answer Generation | `data/qa/korquad/` | `scripts/data/download_korquad.py`로 KorQuAD1 저장, 2.0은 수동 추가 |
+
+```bash
+# KorQuAD1 train/dev JSON 자동 추출
+python scripts/data/download_korquad.py --output data/qa/korquad
+
+# 태스크별 JSONL 생성 (style/dialogue/role/qa)
+python scripts/data/prepare_multitask_dataset.py --output-dir data/processed
+```
 
 ## 설치 방법
 

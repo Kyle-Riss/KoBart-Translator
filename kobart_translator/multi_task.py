@@ -4,10 +4,12 @@ Multi-Task KoBART Architecture
 - 4개의 Task-specific Decoder Heads
 """
 
+import copy
+from typing import Dict, Optional
+
 import torch
 import torch.nn as nn
-from transformers import BartForConditionalGeneration, PreTrainedTokenizerFast
-from typing import Dict, Optional
+from transformers import BartConfig, BartForConditionalGeneration, PreTrainedTokenizerFast
 
 
 class MultiTaskKoBART(nn.Module):
@@ -23,53 +25,127 @@ class MultiTaskKoBART(nn.Module):
         4. QA Answer Generation
     """
     
-    def __init__(self, model_name: str = 'gogamza/kobart-base-v1'):
+    def __init__(
+        self,
+        model_name: str = 'gogamza/kobart-base-v1',
+        encoder_layers: Optional[int] = None,
+        decoder_layers: Optional[int] = None,
+        ffn_dim: Optional[int] = None,
+        num_attention_heads: Optional[int] = None,
+        gradient_checkpointing: bool = False,
+    ):
         super(MultiTaskKoBART, self).__init__()
         
         print("Multi-Task KoBART 모델 초기화 중...")
         
-        # 기본 KoBART 모델 로드
-        base_model = BartForConditionalGeneration.from_pretrained(model_name)
+        config = BartConfig.from_pretrained(model_name)
+        if encoder_layers is not None:
+            config.encoder_layers = encoder_layers
+        if decoder_layers is not None:
+            config.decoder_layers = decoder_layers
+        if num_attention_heads is not None:
+            if config.d_model % num_attention_heads != 0:
+                raise ValueError("d_model must be divisible by num_attention_heads.")
+            config.encoder_attention_heads = num_attention_heads
+            config.decoder_attention_heads = num_attention_heads
+
+        base_model = BartForConditionalGeneration.from_pretrained(
+            model_name,
+            config=config,
+        )
+
+        if encoder_layers is not None and encoder_layers < len(base_model.model.encoder.layers):
+            base_model.model.encoder.layers = nn.ModuleList(
+                list(base_model.model.encoder.layers)[:encoder_layers]
+            )
+        if decoder_layers is not None and decoder_layers < len(base_model.model.decoder.layers):
+            base_model.model.decoder.layers = nn.ModuleList(
+                list(base_model.model.decoder.layers)[:decoder_layers]
+            )
+
+        if ffn_dim is not None:
+            self._apply_ffn_reduction(base_model, ffn_dim)
+            base_model.config.encoder_ffn_dim = ffn_dim
+            base_model.config.decoder_ffn_dim = ffn_dim
+
+        if gradient_checkpointing and hasattr(base_model, "gradient_checkpointing_enable"):
+            base_model.gradient_checkpointing_enable()
+        self.gradient_checkpointing = gradient_checkpointing
         
         # Shared Encoder (공유 인코더)
         self.shared_encoder = base_model.model.encoder
+        if self.gradient_checkpointing and hasattr(self.shared_encoder, "gradient_checkpointing"):
+            self.shared_encoder.gradient_checkpointing = True
         print("[OK] Shared Encoder 로드 완료")
         
         # 기본 디코더 설정 정보 가져오기
         decoder_config = base_model.model.decoder.config
         
-        # 4개의 Task-specific Decoder Heads
-        # 각 디코더는 동일한 구조를 가지지만 독립적으로 학습됨
+        # 태스크 그룹 정의: style/summary/role은 공유 디코더, QA는 별도 디코더
+        self.decoder_groups = {
+            'shared_text': ['style_transfer', 'dialogue_summarization', 'role_generation'],
+            'qa_generation': ['qa_generation'],
+        }
+        self.task_to_decoder = {
+            task: group for group, tasks in self.decoder_groups.items() for task in tasks
+        }
+        
         self.decoders = nn.ModuleDict({
-            'style_transfer': self._create_decoder(base_model),
-            'dialogue_summarization': self._create_decoder(base_model),
-            'role_generation': self._create_decoder(base_model),
-            'qa_generation': self._create_decoder(base_model)
+            'shared_text': self._create_decoder(base_model),
+            'qa_generation': self._create_decoder(base_model),
         })
         
-        # Language Model Heads (각 디코더용)
+        # Language Model Heads (그룹별)
         vocab_size = base_model.config.vocab_size
         hidden_size = base_model.config.d_model
         
         self.lm_heads = nn.ModuleDict({
-            'style_transfer': nn.Linear(hidden_size, vocab_size, bias=False),
-            'dialogue_summarization': nn.Linear(hidden_size, vocab_size, bias=False),
-            'role_generation': nn.Linear(hidden_size, vocab_size, bias=False),
-            'qa_generation': nn.Linear(hidden_size, vocab_size, bias=False)
+            'shared_text': nn.Linear(hidden_size, vocab_size, bias=False),
+            'qa_generation': nn.Linear(hidden_size, vocab_size, bias=False),
         })
         
-        print("[OK] 4개의 Decoder Heads 생성 완료:")
-        print("  - Head 1: Style Transfer")
-        print("  - Head 2: Dialogue Summarization")
-        print("  - Head 3: Role-conditioned Generation")
-        print("  - Head 4: QA Answer Generation")
+        print("[OK] 디코더 헤드 구성 완료:")
+        print("  - Shared Text Decoder: style/dialogue/role")
+        print("  - QA Decoder: qa_generation")
         
         self.config = base_model.config
         
     def _create_decoder(self, base_model):
         """기본 모델의 디코더를 복사하여 새로운 디코더 생성"""
-        import copy
-        return copy.deepcopy(base_model.model.decoder)
+        decoder = copy.deepcopy(base_model.model.decoder)
+        if self.gradient_checkpointing and hasattr(decoder, "gradient_checkpointing"):
+            decoder.gradient_checkpointing = True
+        return decoder
+
+    @staticmethod
+    def _shrink_ffn_layer(layer: nn.Module, target_dim: int):
+        if not hasattr(layer, "fc1") or not hasattr(layer, "fc2"):
+            return
+        fc1: nn.Linear = layer.fc1
+        fc2: nn.Linear = layer.fc2
+        current_dim = fc1.out_features
+        if target_dim >= current_dim:
+            return
+
+        new_fc1 = nn.Linear(fc1.in_features, target_dim, bias=fc1.bias is not None)
+        with torch.no_grad():
+            new_fc1.weight.copy_(fc1.weight[:target_dim, :])
+            if fc1.bias is not None:
+                new_fc1.bias.copy_(fc1.bias[:target_dim])
+        layer.fc1 = new_fc1
+
+        new_fc2 = nn.Linear(target_dim, fc2.out_features, bias=fc2.bias is not None)
+        with torch.no_grad():
+            new_fc2.weight.copy_(fc2.weight[:, :target_dim])
+            if fc2.bias is not None:
+                new_fc2.bias.copy_(fc2.bias)
+        layer.fc2 = new_fc2
+
+    def _apply_ffn_reduction(self, base_model: BartForConditionalGeneration, target_dim: int):
+        for enc_layer in base_model.model.encoder.layers:
+            self._shrink_ffn_layer(enc_layer, target_dim)
+        for dec_layer in base_model.model.decoder.layers:
+            self._shrink_ffn_layer(dec_layer, target_dim)
     
     def forward(
         self,
@@ -95,11 +171,12 @@ class MultiTaskKoBART(nn.Module):
         )
         
         # Task-specific Decoder로 디코딩
-        if task not in self.decoders:
+        if task not in self.task_to_decoder:
             raise ValueError(f"Unknown task: {task}")
         
-        decoder = self.decoders[task]
-        lm_head = self.lm_heads[task]
+        decoder_key = self.task_to_decoder[task]
+        decoder = self.decoders[decoder_key]
+        lm_head = self.lm_heads[decoder_key]
         
         decoder_outputs = decoder(
             input_ids=decoder_input_ids,
@@ -142,8 +219,11 @@ class MultiTaskKoBART(nn.Module):
         )
         
         # Task-specific Decoder 선택
-        decoder = self.decoders[task]
-        lm_head = self.lm_heads[task]
+        decoder_key = self.task_to_decoder.get(task)
+        if decoder_key is None:
+            raise ValueError(f"Unknown task: {task}")
+        decoder = self.decoders[decoder_key]
+        lm_head = self.lm_heads[decoder_key]
         
         # 간단한 greedy decoding (실제로는 beam search 구현 필요)
         batch_size = input_ids.size(0)
@@ -184,9 +264,10 @@ class MultiTaskKoBART(nn.Module):
     
     def get_decoder_parameters(self, task: str):
         """특정 태스크 디코더의 파라미터 반환"""
-        if task not in self.decoders:
+        if task not in self.task_to_decoder:
             raise ValueError(f"Unknown task: {task}")
-        return list(self.decoders[task].parameters()) + list(self.lm_heads[task].parameters())
+        decoder_key = self.task_to_decoder[task]
+        return list(self.decoders[decoder_key].parameters()) + list(self.lm_heads[decoder_key].parameters())
     
     def freeze_encoder(self):
         """인코더 파라미터 고정"""

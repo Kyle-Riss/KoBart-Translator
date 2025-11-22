@@ -1,0 +1,8 @@
+{
+  "epochs": [],
+  "train_loss": [],
+  "dev_loss": [],
+  "dev_task_losses": {},
+  "best_epoch": null,
+  "best_dev_loss": Infinity
+}
