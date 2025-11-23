@@ -148,6 +148,30 @@ print(output)
 - 4개 디코더: 각 ~103M 파라미터
 - 총 파라미터: ~481M
 
+### Tiny Student Model (Knowledge Distillation)
+- 초경량 모델: ~1M~5M 파라미터
+- Teacher 모델로부터 지식 증류
+- 자세한 내용은 `docs/STUDENT_DISTILLATION_PLAN.md` 참조
+
+## 🚀 최근 개선사항
+
+### 학습 개선
+- **정규화**: Weight decay (기본값 0.01) 추가로 과적합 방지
+- **Early Stopping**: 검증 손실이 개선되지 않으면 자동으로 학습 중단
+- **Learning Rate Scheduler**: ReduceLROnPlateau 또는 CosineAnnealingLR 지원
+- **Mixed Precision Training**: AMP 지원으로 메모리 효율성 향상
+- **Gradient Checkpointing**: 메모리 사용량 감소 옵션
+
+### 시각화 도구
+- 학습 곡선 시각화: `scripts/utils/plot_training.py`
+- 태스크별 손실 추적 및 비교
+- TensorBoard 로깅 지원
+
+### Knowledge Distillation
+- Tiny Student 모델 구현 (`kobart_translator/tiny_student.py`)
+- Teacher-Student 학습 스크립트 (`scripts/training/train_student.py`)
+- 8K SentencePiece 토크나이저 재학습 지원
+
 ## 참고 자료
 
 - [Hugging Face Model Hub](https://huggingface.co/gogamza/kobart-base-v1)
