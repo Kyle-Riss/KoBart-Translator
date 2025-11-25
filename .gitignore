@@ -54,8 +54,14 @@ logs/
 
 # Large data files (exceed GitHub 100MB limit)
 data/processed/*.jsonl
-data/qa/KorQuAD_2.1_*/*.json
+data/qa/KorQuAD_2.1_*/*/*.json
+data/qa/korquad/korquad1_train.json
+data/qa/korquad/korquad1_validation.json
 data/dialogue_summarization/aihub_dialogue_summary/**/*.json
+# Exclude all large JSON files in data directories
+data/**/*.json
+!data/**/README.md
+!data/**/*.py
 # Keep only small sample files or use Git LFS for large datasets
 
 
