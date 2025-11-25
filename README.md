@@ -87,6 +87,32 @@ python3 scripts/training/train_multi_task.py
 - 4개의 태스크별 디코더 생성
 - 샘플 데이터로 학습
 
+### 3. Tiny Student Model (Knowledge Distillation)
+
+#### 모델 초기화 및 사용
+
+```python
+from kobart_translator.tiny_student import TinyStudentForConditionalGeneration, TinyStudentConfig
+
+# 기본 설정으로 모델 생성
+config = TinyStudentConfig()
+model = TinyStudentForConditionalGeneration(config)
+
+# 파라미터 수 확인
+print(f"Total parameters: {model.count_parameters():,}")
+```
+
+#### Knowledge Distillation 학습
+
+```bash
+python3 scripts/training/train_student.py \
+    --teacher cosmoquester/bart-ko-small \
+    --tokenizer_path <tokenizer_path> \
+    --data_paths data/processed/style_transfer.jsonl \
+    --epochs 3 \
+    --batch_size 8
+```
+
 ### Python 코드에서 직접 사용
 
 ```python
@@ -149,8 +175,39 @@ print(output)
 - 총 파라미터: ~481M
 
 ### Tiny Student Model (Knowledge Distillation)
-- 초경량 모델: ~1M~5M 파라미터
-- Teacher 모델로부터 지식 증류
+- **구조**:
+  - 공유 인코더: 2 layers, d_model=128, heads=1
+  - 디코더 그룹: 2개 (shared_text, qa_generation)
+    - shared_text: style_transfer, dialogue_summarization, role_generation
+    - qa_generation: qa_generation
+  - 각 디코더: 2 layers, d_model=128, heads=1
+- **파라미터**: ~1M~2M (정확한 수는 모델 인스턴스화 시 `model.count_parameters()`로 확인)
+- **모델 크기**: 약 4~8MB (FP32 기준)
+- **특징**: 
+  - Teacher 모델(MultiTaskKoBART)로부터 지식 증류
+  - Tied LM Head로 임베딩 공유
+  - 초경량 설계로 모바일/엣지 디바이스 배포 가능
+- **초경량 모델**: ~1M~2M 파라미터 (정확한 수는 모델 인스턴스화 시 계산)
+- **아키텍처**:
+  - Vocab size: 8,000 (SentencePiece)
+  - Encoder layers: 2
+  - Decoder layers: 2 (shared_text, qa_generation 2개 디코더)
+  - d_model: 128
+  - Attention heads: 1
+  - FFN dimension: 256
+  - Max position embeddings: 256
+- **특징**:
+  - Teacher 모델(MultiTaskKoBART)로부터 지식 증류(Knowledge Distillation)
+  - 공유 인코더 + 2개의 태스크별 디코더 (shared_text, qa_generation)
+  - Tied LM Head로 임베딩 공유하여 파라미터 최소화
+- **사용 방법**:
+  ```python
+  from kobart_translator.tiny_student import TinyStudentForConditionalGeneration, TinyStudentConfig
+  
+  config = TinyStudentConfig()
+  model = TinyStudentForConditionalGeneration(config)
+  ```
+- **학습**: `scripts/training/train_student.py` 사용
 - 자세한 내용은 `docs/STUDENT_DISTILLATION_PLAN.md` 참조
 
 ## 🚀 최근 개선사항
