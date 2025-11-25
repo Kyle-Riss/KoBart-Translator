@@ -52,4 +52,10 @@ Thumbs.db
 *.log
 logs/
 
+# Large data files (exceed GitHub 100MB limit)
+data/processed/*.jsonl
+data/qa/KorQuAD_2.1_*/*.json
+data/dialogue_summarization/aihub_dialogue_summary/**/*.json
+# Keep only small sample files or use Git LFS for large datasets
+
 
